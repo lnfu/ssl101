@@ -1,25 +1,30 @@
 import ml_collections
 
 
-def get_config():
+def get_config() -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
 
     # Model
-    config.model = "ResNet18"
+    config.model = "MLP"
+    config.hidden_dim = 128
+    config.num_classes = 10
 
     # Data
-    config.dataset = "cifar10"
-    config.batch_size = 128
+    config.dataset = "mnist"
+    config.batch_size = 256
 
     # Optimizer
-    config.learning_rate = 0.1
+    config.learning_rate = 0.05
     config.momentum = 0.9
-    config.warmup_epochs = 5.0
-    config.num_epochs = 100.0
-    config.weight_decay = 1e-4
+    config.num_epochs = 80
 
     # Training
-    config.log_every_steps = 100
-    config.half_precision = False
+    config.seed = 42
+    config.log_every_steps = 10
+    config.checkpoint_dir = "checkpoints"
+    config.checkpoint_every_epochs = 5
+
+    # Logging
+    config.wandb_project = "ssl101"
 
     return config
