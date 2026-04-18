@@ -12,6 +12,8 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "pandas>=3.0.2",
     "wandb>=0.25.1",
+    "gradio>=5",
+    "pillow",
 ]
 
 [project.optional-dependencies]

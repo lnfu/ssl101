@@ -29,6 +29,12 @@ def init_params(
     }
 
 
+def _logits(params: dict, X: jax.Array) -> jax.Array:
+    z1 = X @ params["W1"] + params["b1"]
+    a1 = jnp.maximum(0.0, z1)
+    return a1 @ params["W2"] + params["b2"]
+
+
 def forward(params: dict, X: jax.Array) -> jax.Array:
     """MLP forward pass: Linear → ReLU → Linear → Softmax.
 
@@ -39,14 +45,7 @@ def forward(params: dict, X: jax.Array) -> jax.Array:
     Returns:
         Probability array of shape (N, num_classes).
     """
-    z1 = X @ params["W1"] + params["b1"]
-    a1 = jnp.maximum(0.0, z1)  # ReLU
-    z2 = a1 @ params["W2"] + params["b2"]
-
-    # Numerically stable softmax: subtract row-wise max before exp
-    z2 = z2 - jnp.max(z2, axis=-1, keepdims=True)
-    exp_z2 = jnp.exp(z2)
-    return exp_z2 / exp_z2.sum(axis=-1, keepdims=True)
+    return jax.nn.softmax(_logits(params, X), axis=-1)
 
 
 def cross_entropy_loss(params: dict, X: jax.Array, y: jax.Array) -> jax.Array:
@@ -60,9 +59,8 @@ def cross_entropy_loss(params: dict, X: jax.Array, y: jax.Array) -> jax.Array:
     Returns:
         Scalar loss value.
     """
-    probs = forward(params, X)
-    log_probs = jnp.log(probs + 1e-9)
-    one_hot = jnp.eye(probs.shape[-1])[y]
+    log_probs = jax.nn.log_softmax(_logits(params, X), axis=-1)
+    one_hot = jnp.eye(log_probs.shape[-1])[y]
     return -jnp.mean(jnp.sum(one_hot * log_probs, axis=-1))
 
 

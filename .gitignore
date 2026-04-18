@@ -12,3 +12,4 @@ wheels/
 checkpoints/
 wandb/
 .env
+.gradio/
