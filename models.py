@@ -2,7 +2,6 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.nn import initializers as jax_initializers
 
-# kaiming_normal(fan_out, nonlinearity='relu') — matches torchvision ResNet18
 _kaiming_normal = jax_initializers.variance_scaling(2.0, "fan_out", "normal")
 
 
@@ -128,8 +127,8 @@ class Layer4(nnx.Module):
         return x
 
 
-class ResNet18(nnx.Module):
-    def __init__(self, num_classes: int, rngs: nnx.Rngs) -> None:
+class ResNet18Backbone(nnx.Module):
+    def __init__(self, rngs: nnx.Rngs) -> None:
         self.conv1 = nnx.Conv(
             in_features=3,
             out_features=64,
@@ -147,12 +146,6 @@ class ResNet18(nnx.Module):
         self.layer3 = Layer3(rngs)
         self.layer4 = Layer4(rngs)
 
-        self.fc = nnx.Linear(
-            in_features=512,
-            out_features=num_classes,
-            rngs=rngs,
-        )
-
     def __call__(
         self, x: jnp.ndarray, use_running_average: bool = False
     ) -> jnp.ndarray:
@@ -169,6 +162,51 @@ class ResNet18(nnx.Module):
         x = self.layer4(x, use_running_average)
 
         x = x.mean(axis=(1, 2))  # (B, H, W, C) -> (B, C)
-        x = self.fc(x)
 
+        return x
+
+
+class ResNet18(nnx.Module):
+    def __init__(self, num_classes: int, rngs: nnx.Rngs) -> None:
+        self.backbone = ResNet18Backbone(rngs)
+        self.fc = nnx.Linear(
+            in_features=512,
+            out_features=num_classes,
+            rngs=rngs,
+        )
+
+    def __call__(
+        self, x: jnp.ndarray, use_running_average: bool = False
+    ) -> jnp.ndarray:
+        x = self.backbone(x, use_running_average)
+        x = self.fc(x)
+        return x
+
+
+class ProjectionHead(nnx.Module):
+    def __init__(
+        self, in_features: int, hidden_dim: int, out_features: int, rngs: nnx.Rngs
+    ) -> None:
+        self.fc1 = nnx.Linear(in_features, hidden_dim, rngs=rngs)
+        self.bn = nnx.BatchNorm(hidden_dim, momentum=0.9, rngs=rngs)
+        self.fc2 = nnx.Linear(hidden_dim, out_features, rngs=rngs)
+
+    def __call__(self, x, use_running_average=False):
+        x = self.fc1(x)
+        x = self.bn(x, use_running_average=use_running_average)
+        x = nnx.relu(x)
+        x = self.fc2(x)
+        return x
+
+
+class SimCLR(nnx.Module):
+    def __init__(self, rngs: nnx.Rngs) -> None:
+        self.backbone = ResNet18Backbone(rngs)
+        self.projection_head = ProjectionHead(512, 512, 128, rngs)
+
+    def __call__(
+        self, x: jnp.ndarray, use_running_average: bool = False
+    ) -> jnp.ndarray:
+        x = self.backbone(x, use_running_average)
+        x = self.projection_head(x, use_running_average)
         return x

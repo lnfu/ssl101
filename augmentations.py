@@ -2,11 +2,11 @@ import augmax
 import jax
 import jax.numpy as jnp
 
-_CIFAR10_MEAN = jnp.array([0.4914, 0.4822, 0.4465])
-_CIFAR10_STD = jnp.array([0.2470, 0.2435, 0.2616])
+_STL10_MEAN = jnp.array([0.4467, 0.4398, 0.4066])
+_STL10_STD = jnp.array([0.2603, 0.2566, 0.2713])
 
 
-def make_augmentation(image_size: int = 32) -> augmax.Chain:
+def make_augmentation(image_size: int = 96) -> augmax.Chain:
     return augmax.Chain(
         augmax.RandomSizedCrop(image_size, image_size),
         augmax.HorizontalFlip(),
@@ -15,7 +15,7 @@ def make_augmentation(image_size: int = 32) -> augmax.Chain:
         ),
         augmax.RandomGrayscale(p=0.2),
         augmax.GaussianBlur(p=0.5),
-        augmax.Normalize(mean=_CIFAR10_MEAN, std=_CIFAR10_STD),
+        augmax.Normalize(mean=_STL10_MEAN, std=_STL10_STD),
     )
 
 

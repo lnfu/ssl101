@@ -3,7 +3,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 import wandb
 from absl import app
@@ -13,7 +12,7 @@ from ml_collections import config_flags
 from augmentations import augment_batch, make_augmentation
 from checkpoint import make_checkpointer, save_checkpoint
 from input_pipeline import create_dataset, get_split_size
-from models import ResNet18
+from models import SimCLR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,48 +23,56 @@ logger = logging.getLogger(__name__)
 _CONFIG = config_flags.DEFINE_config_file("config", "configs/sgd.py")
 
 
-def make_train_step(augment_fn):
+def _nt_xent_loss(
+    z1: jax.Array, z2: jax.Array, temperature: float
+) -> tuple[jax.Array, jax.Array]:
+    batch_size = z1.shape[0]
+    z1 = z1 / (jnp.linalg.norm(z1, axis=-1, keepdims=True) + 1e-8)
+    z2 = z2 / (jnp.linalg.norm(z2, axis=-1, keepdims=True) + 1e-8)
+    z = jnp.concatenate([z1, z2], axis=0)  # (2B, D)
+
+    sim = (z @ z.T) / temperature  # (2B, 2B)
+    sim = sim - jnp.eye(2 * batch_size) * 1e9  # mask self-similarity
+
+    targets = jnp.concatenate(
+        [jnp.arange(batch_size, 2 * batch_size), jnp.arange(0, batch_size)]
+    )
+
+    loss = optax.softmax_cross_entropy_with_integer_labels(sim, targets).mean()
+    contrastive_acc = jnp.mean(jnp.argmax(sim, axis=-1) == targets)
+    return loss, contrastive_acc
+
+
+def make_train_step(augment_fn, temperature: float):
     @nnx.jit
     def train_step(
-        model: ResNet18,
+        model: SimCLR,
         optimizer: nnx.Optimizer,
         X: jax.Array,
-        y: jax.Array,
         rng: jax.Array,
-    ) -> jax.Array:
-        X = augment_fn(rng, X)
+    ) -> tuple[jax.Array, jax.Array]:
+        rng1, rng2 = jax.random.split(rng)
+        x1 = augment_fn(rng1, X)
+        x2 = augment_fn(rng2, X)
 
-        def loss_fn(model: ResNet18) -> jax.Array:
-            logits = model(X)
-            return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
+        def loss_fn(model: SimCLR) -> tuple[jax.Array, jax.Array]:
+            z1 = model(x1)
+            z2 = model(x2)
+            return _nt_xent_loss(z1, z2, temperature)
 
-        loss, grads = nnx.value_and_grad(loss_fn)(model)
+        (loss, acc), grads = nnx.value_and_grad(loss_fn, has_aux=True)(model)
         optimizer.update(model, grads)
-        return loss
+        return loss, acc
 
     return train_step
-
-
-@nnx.jit
-def compute_accuracy(model: ResNet18, X: jax.Array, y: jax.Array) -> jax.Array:
-    logits = model(X, use_running_average=True)
-    return jnp.mean(jnp.argmax(logits, axis=-1) == y)
-
-
-def _load_test_set(batch_size: int) -> tuple[jax.Array, jax.Array]:
-    xs, ys = [], []
-    for batch in create_dataset("test", batch_size):
-        xs.append(batch["image"])
-        ys.append(batch["label"])
-    return jnp.array(np.concatenate(xs)), jnp.array(np.concatenate(ys))
 
 
 def main(_) -> None:
     config = _CONFIG.value
 
-    model = ResNet18(num_classes=config.num_classes, rngs=nnx.Rngs(config.seed))
+    model = SimCLR(rngs=nnx.Rngs(config.seed))
 
-    steps_per_epoch = get_split_size("train") // config.batch_size
+    steps_per_epoch = get_split_size("unlabeled") // config.batch_size
     num_epochs = int(config.num_epochs)
     warmup_steps = int(config.warmup_epochs * steps_per_epoch)
 
@@ -96,7 +103,7 @@ def main(_) -> None:
         def augment_fn(rng: jax.Array, x: jax.Array) -> jax.Array:
             return x
 
-    train_step = make_train_step(augment_fn)
+    train_step = make_train_step(augment_fn, float(config.temperature))
 
     if not config.dry_run:
         wandb.init(project=config.wandb_project, config=config.to_dict())
@@ -107,50 +114,43 @@ def main(_) -> None:
         run_name = "dry_run"
         checkpointer, run_dir = None, None
 
-    logger.info("Loading test set...")
-    test_X, test_y = _load_test_set(config.batch_size)
-
     logger.info(
-        "Training: %d epochs × %d steps/epoch (batch=%d, augment=%s)",
+        "SimCLR pretraining: %d epochs × %d steps/epoch (batch=%d, temperature=%g)",
         num_epochs,
         steps_per_epoch,
         config.batch_size,
-        config.augment,
+        config.temperature,
     )
 
     rng = jax.random.key(config.seed)
     for epoch in range(1, num_epochs + 1):
         epoch_loss = 0.0
+        epoch_acc = 0.0
         num_steps = 0
 
         for batch in create_dataset(
-            "train", config.batch_size, seed=config.seed + epoch
+            "unlabeled", config.batch_size, seed=config.seed + epoch
         ):
             X_batch = jnp.array(batch["image"])
-            y_batch = jnp.array(batch["label"])
             rng, step_rng = jax.random.split(rng)
-            loss = train_step(model, optimizer, X_batch, y_batch, step_rng)
+            loss, acc = train_step(model, optimizer, X_batch, step_rng)
             epoch_loss += float(loss)
+            epoch_acc += float(acc)
             num_steps += 1
-
-        test_acc = float(compute_accuracy(model, test_X, test_y))
-        train_acc = float(compute_accuracy(model, X_batch, y_batch))
 
         metrics = {
             "epoch": epoch,
             "loss": epoch_loss / num_steps,
-            "train_acc": train_acc,
-            "test_acc": test_acc,
+            "contrastive_acc": epoch_acc / num_steps,
         }
         if not config.dry_run:
             wandb.log(metrics, step=epoch)
         logger.info(
-            "Epoch %2d/%d | loss: %.4f | train_acc: %.4f | test_acc: %.4f",
+            "Epoch %2d/%d | loss: %.4f | contrastive_acc: %.4f",
             epoch,
             num_epochs,
             metrics["loss"],
-            train_acc,
-            test_acc,
+            metrics["contrastive_acc"],
         )
 
         if not config.dry_run and epoch % config.checkpoint_every_epochs == 0:
