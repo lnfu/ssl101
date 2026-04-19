@@ -1,5 +1,9 @@
 import jax.numpy as jnp
+from jax.nn import initializers as jax_initializers
 from flax import nnx
+
+# kaiming_normal(fan_out, nonlinearity='relu') — matches torchvision ResNet18
+_kaiming_normal = jax_initializers.variance_scaling(2.0, "fan_out", "normal")
 
 
 class BasicBlock(nnx.Module):
@@ -13,6 +17,7 @@ class BasicBlock(nnx.Module):
                 kernel_size=(1, 1),
                 strides=strides,
                 use_bias=False,
+                kernel_init=_kaiming_normal,
                 rngs=rngs,
             )
             self.downsample_bn = nnx.BatchNorm(
@@ -30,6 +35,7 @@ class BasicBlock(nnx.Module):
             padding=1,
             strides=strides,
             use_bias=False,
+            kernel_init=_kaiming_normal,
             rngs=rngs,
         )
         self.bn1 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
@@ -39,6 +45,7 @@ class BasicBlock(nnx.Module):
             kernel_size=(3, 3),
             padding=1,
             use_bias=False,
+            kernel_init=_kaiming_normal,
             rngs=rngs,
         )
         self.bn2 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
@@ -128,6 +135,7 @@ class ResNet18(nnx.Module):
             strides=(2, 2),
             padding=3,
             use_bias=False,
+            kernel_init=_kaiming_normal,
             rngs=rngs,
         )
         self.bn = nnx.BatchNorm(num_features=64, rngs=rngs)
