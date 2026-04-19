@@ -62,7 +62,9 @@ def _to_display(arr: np.ndarray) -> np.ndarray:
     """(32, 32, 3) float32 [0,1]  →  (DISPLAY_SIZE, DISPLAY_SIZE, 3) uint8"""
     u8 = (arr * 255).clip(0, 255).astype(np.uint8)
     return np.array(
-        Image.fromarray(u8).resize((DISPLAY_SIZE, DISPLAY_SIZE), Image.NEAREST)
+        Image.fromarray(u8).resize(
+            (DISPLAY_SIZE, DISPLAY_SIZE), Image.Resampling.NEAREST
+        )
     )
 
 
@@ -70,7 +72,8 @@ def _dataset_item(split: str, idx: int) -> tuple[np.ndarray, int, str]:
     X, y = _load_cifar10_split(split)
     idx = int(idx) % len(X)
     img = _to_display(X[idx])
-    info = f"{split}  |  index {idx} / {len(X) - 1}  |  true label: **{CIFAR10_CLASSES[y[idx]]}**"
+    label = CIFAR10_CLASSES[y[idx]]
+    info = f"{split}  |  index {idx} / {len(X) - 1}  |  true label: **{label}**"
     return img, idx, info
 
 
@@ -80,16 +83,17 @@ def classify(img: np.ndarray | None) -> str:
     if img is None:
         return "⚠️ No image available."
 
-    pil = Image.fromarray(img.astype(np.uint8)).resize((32, 32), Image.BILINEAR)
+    pil = Image.fromarray(img.astype(np.uint8)).resize(
+        (32, 32), Image.Resampling.BILINEAR
+    )
     x = jnp.array(np.array(pil, dtype=np.float32) / 255.0)[None]  # (1,32,32,3)
 
     logits = _model(x, use_running_average=True)
     probs = jax.nn.softmax(logits[0])
     pred = int(jnp.argmax(probs))
 
-    lines = [
-        f"## 🏷️  {CIFAR10_CLASSES[pred].upper()}  —  {float(probs[pred]):.1%} confidence\n"
-    ]
+    confidence = f"{float(probs[pred]):.1%}"
+    lines = [f"## 🏷️  {CIFAR10_CLASSES[pred].upper()}  —  {confidence} confidence\n"]
     for i, (cls, p) in enumerate(zip(CIFAR10_CLASSES, probs)):
         pct = float(p)
         filled = int(pct * 24)

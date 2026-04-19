@@ -100,6 +100,7 @@ def main(_) -> None:
 
     if not config.dry_run:
         wandb.init(project=config.wandb_project, config=config.to_dict())
+        assert wandb.run is not None
         run_name = Path(wandb.run.dir).parent.name
         checkpointer, run_dir = make_checkpointer(config.checkpoint_dir, run_name)
     else:
@@ -153,6 +154,7 @@ def main(_) -> None:
         )
 
         if not config.dry_run and epoch % config.checkpoint_every_epochs == 0:
+            assert checkpointer is not None and run_dir is not None
             save_checkpoint(checkpointer, run_dir, epoch, model, optimizer)
 
     if not config.dry_run:

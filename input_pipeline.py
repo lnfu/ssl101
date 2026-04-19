@@ -3,7 +3,7 @@ import os
 import pickle
 import tarfile
 import urllib.request
-from typing import Iterator
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 _CIFAR10_TRAIN_SIZE = 50000
 _CIFAR10_TEST_SIZE = 10000
 _CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
-_CIFAR10_DIR = os.path.join(os.path.expanduser("~"), ".cache", "cifar10")
+_CIFAR10_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 _cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
@@ -31,7 +31,10 @@ def _download_cifar10() -> str:
 def _load_batch(path: str) -> tuple[np.ndarray, np.ndarray]:
     with open(path, "rb") as f:
         d = pickle.load(f, encoding="bytes")
-    X = d[b"data"].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1).astype(np.float32) / 255.0
+    X = (
+        d[b"data"].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1).astype(np.float32)
+        / 255.0
+    )
     y = np.array(d[b"labels"], dtype=np.int32)
     return X, y
 

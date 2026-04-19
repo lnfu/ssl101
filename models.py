@@ -1,6 +1,6 @@
 import jax.numpy as jnp
-from jax.nn import initializers as jax_initializers
 from flax import nnx
+from jax.nn import initializers as jax_initializers
 
 # kaiming_normal(fan_out, nonlinearity='relu') — matches torchvision ResNet18
 _kaiming_normal = jax_initializers.variance_scaling(2.0, "fan_out", "normal")
@@ -58,6 +58,7 @@ class BasicBlock(nnx.Module):
             identity = x
         else:
             identity = self.downsample_conv(x)
+            assert self.downsample_bn is not None
             identity = self.downsample_bn(
                 identity, use_running_average=use_running_average
             )
