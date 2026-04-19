@@ -16,3 +16,24 @@ dependencies = [
     "gradio>=5",
     "pillow",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.11",
+    "ty>=0.0.31",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty]
+
+[tool.ty.environment]
+python-version = "3.13"
