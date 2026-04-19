@@ -10,5 +10,9 @@ dependencies = [
     "jax[cuda12]",
     "ml-collections>=1.1.0",
     "orbax>=0.1.9",
+    "dm-pix>=0.4.4",
+    "augmax>=0.4.1",
+    "wandb>=0.25.1",
+    "gradio>=5",
+    "pillow",
 ]
-
