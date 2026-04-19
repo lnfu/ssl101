@@ -22,6 +22,7 @@ class BasicBlock(nnx.Module):
             )
             self.downsample_bn = nnx.BatchNorm(
                 num_features=out_features,
+                momentum=0.9,
                 rngs=rngs,
             )
         else:
@@ -38,7 +39,7 @@ class BasicBlock(nnx.Module):
             kernel_init=_kaiming_normal,
             rngs=rngs,
         )
-        self.bn1 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
+        self.bn1 = nnx.BatchNorm(num_features=out_features, momentum=0.9, rngs=rngs)
         self.conv2 = nnx.Conv(
             in_features=out_features,
             out_features=out_features,
@@ -48,7 +49,7 @@ class BasicBlock(nnx.Module):
             kernel_init=_kaiming_normal,
             rngs=rngs,
         )
-        self.bn2 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
+        self.bn2 = nnx.BatchNorm(num_features=out_features, momentum=0.9, rngs=rngs)
 
     def __call__(
         self, x: jnp.ndarray, use_running_average: bool = False
@@ -138,7 +139,7 @@ class ResNet18(nnx.Module):
             kernel_init=_kaiming_normal,
             rngs=rngs,
         )
-        self.bn = nnx.BatchNorm(num_features=64, rngs=rngs)
+        self.bn = nnx.BatchNorm(num_features=64, momentum=0.9, rngs=rngs)
 
         self.layer1 = Layer1(rngs)
         self.layer2 = Layer2(rngs)
