@@ -12,6 +12,7 @@ class BasicBlock(nnx.Module):
                 out_features=out_features,
                 kernel_size=(1, 1),
                 strides=strides,
+                use_bias=False,
                 rngs=rngs,
             )
             self.downsample_bn = nnx.BatchNorm(
@@ -28,6 +29,7 @@ class BasicBlock(nnx.Module):
             kernel_size=(3, 3),
             padding=1,
             strides=strides,
+            use_bias=False,
             rngs=rngs,
         )
         self.bn1 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
@@ -36,6 +38,7 @@ class BasicBlock(nnx.Module):
             out_features=out_features,
             kernel_size=(3, 3),
             padding=1,
+            use_bias=False,
             rngs=rngs,
         )
         self.bn2 = nnx.BatchNorm(num_features=out_features, rngs=rngs)
@@ -124,6 +127,7 @@ class ResNet18(nnx.Module):
             kernel_size=(7, 7),
             strides=(2, 2),
             padding=3,
+            use_bias=False,
             rngs=rngs,
         )
         self.bn = nnx.BatchNorm(num_features=64, rngs=rngs)
@@ -145,7 +149,9 @@ class ResNet18(nnx.Module):
         x = self.conv1(x)
         x = self.bn(x, use_running_average=use_running_average)
         x = nnx.relu(x)
-        x = nnx.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding=((1, 1), (1, 1)))
+        x = nnx.max_pool(
+            x, window_shape=(3, 3), strides=(2, 2), padding=((1, 1), (1, 1))
+        )
 
         x = self.layer1(x, use_running_average)
         x = self.layer2(x, use_running_average)
