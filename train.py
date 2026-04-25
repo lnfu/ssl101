@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -9,9 +10,13 @@ from absl import app
 from flax import nnx
 from ml_collections import config_flags
 
-from augmentations import augment_batch, make_augmentation
+from augmentations import (
+    augment_batch,
+    make_normalize_only,
+    make_pretrain_augmentation,
+)
 from checkpoint import make_checkpointer, save_checkpoint
-from input_pipeline import create_dataset, get_split_size
+from input_pipeline import compute_num_steps, create_dataset
 from models import SimCLR
 
 logging.basicConfig(
@@ -72,7 +77,11 @@ def main(_) -> None:
 
     model = SimCLR(rngs=nnx.Rngs(config.seed))
 
-    steps_per_epoch = get_split_size("unlabeled") // config.batch_size
+    # Drop the last partial batch so the step count is exact and JIT traces
+    # compile once per shape.
+    steps_per_epoch = compute_num_steps(
+        "unlabeled", config.batch_size, drop_remainder=True
+    )
     num_epochs = int(config.num_epochs)
     warmup_steps = int(config.warmup_epochs * steps_per_epoch)
 
@@ -93,15 +102,9 @@ def main(_) -> None:
         raise ValueError(f"Unknown optimizer {config.optimizer!r}")
     optimizer = nnx.Optimizer(model, tx, wrt=nnx.Param)
 
-    if config.augment:
-        chain = make_augmentation()
-
-        def augment_fn(rng: jax.Array, x: jax.Array) -> jax.Array:
-            return augment_batch(chain, rng, x)
-    else:
-
-        def augment_fn(rng: jax.Array, x: jax.Array) -> jax.Array:
-            return x
+    # Normalize is always applied; random augmentations are toggled by config.
+    chain = make_pretrain_augmentation() if config.augment else make_normalize_only()
+    augment_fn = partial(augment_batch, chain)
 
     train_step = make_train_step(augment_fn, float(config.temperature))
 
@@ -129,7 +132,10 @@ def main(_) -> None:
         num_steps = 0
 
         for batch in create_dataset(
-            "unlabeled", config.batch_size, seed=config.seed + epoch
+            "unlabeled",
+            config.batch_size,
+            seed=config.seed + epoch,
+            drop_remainder=True,
         ):
             X_batch = jnp.array(batch["image"])
             rng, step_rng = jax.random.split(rng)
@@ -153,7 +159,13 @@ def main(_) -> None:
             metrics["contrastive_acc"],
         )
 
-        if not config.dry_run and epoch % config.checkpoint_every_epochs == 0:
+        # Save on scheduled epochs, and always on the final epoch so no work
+        # is lost when num_epochs is not a multiple of checkpoint_every_epochs.
+        is_final_epoch = epoch == num_epochs
+        should_checkpoint = (
+            epoch % config.checkpoint_every_epochs == 0 or is_final_epoch
+        )
+        if not config.dry_run and should_checkpoint:
             assert checkpointer is not None and run_dir is not None
             save_checkpoint(checkpointer, run_dir, epoch, model, optimizer)
 

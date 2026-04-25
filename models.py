@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from flax import nnx
 from jax.nn import initializers as jax_initializers
@@ -210,3 +211,38 @@ class SimCLR(nnx.Module):
         x = self.backbone(x, use_running_average)
         x = self.projection_head(x, use_running_average)
         return x
+
+
+class LinearClassifier(nnx.Module):
+    """Classifier head on top of a pretrained backbone.
+
+    When ``freeze_backbone`` is True (linear probe), the backbone always uses
+    BatchNorm running statistics and gradients are blocked at the backbone.
+    When False (full fine-tune), ``use_running_average`` is forwarded to the
+    backbone so callers can toggle train/eval BN behavior per step.
+    """
+
+    def __init__(
+        self,
+        backbone: ResNet18Backbone,
+        num_classes: int,
+        rngs: nnx.Rngs,
+        freeze_backbone: bool = True,
+    ) -> None:
+        self.backbone = backbone
+        self.freeze_backbone = freeze_backbone
+        self.fc = nnx.Linear(
+            in_features=512,
+            out_features=num_classes,
+            rngs=rngs,
+        )
+
+    def __call__(
+        self, x: jnp.ndarray, use_running_average: bool = False
+    ) -> jnp.ndarray:
+        if self.freeze_backbone:
+            features = self.backbone(x, use_running_average=True)
+            features = jax.lax.stop_gradient(features)
+        else:
+            features = self.backbone(x, use_running_average=use_running_average)
+        return self.fc(features)

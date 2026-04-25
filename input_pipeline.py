@@ -1,99 +1,134 @@
 import logging
-import os
 import tarfile
 import urllib.request
-from collections.abc import Iterator
+from functools import lru_cache
+from pathlib import Path
 
+import grain.python as grain
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_STL10_TRAIN_SIZE = 5000
-_STL10_TEST_SIZE = 8000
-_STL10_UNLABELED_SIZE = 100000
 _STL10_URL = "https://ai.stanford.edu/~acoates/stl10/stl10_binary.tar.gz"
-_STL10_DIR = os.path.join(os.path.dirname(__file__), "data")
+_STL10_DIR = Path(__file__).parent / "data"
 
-_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+_VALID_SPLITS = ("train", "test", "unlabeled")
+_SPLIT_SIZES = {
+    "train": 5000,
+    "test": 8000,
+    "unlabeled": 100000,
+}
 
 
-def _download_stl10() -> str:
-    os.makedirs(_STL10_DIR, exist_ok=True)
-    dest = os.path.join(_STL10_DIR, "stl10_binary.tar.gz")
-    if not os.path.exists(os.path.join(_STL10_DIR, "stl10_binary")):
+def _validate_split(split: str) -> None:
+    if split not in _VALID_SPLITS:
+        raise ValueError(f"Unknown split {split!r}. Expected one of {_VALID_SPLITS}.")
+
+
+def _download_stl10() -> Path:
+    _STL10_DIR.mkdir(parents=True, exist_ok=True)
+    archive = _STL10_DIR / "stl10_binary.tar.gz"
+    extracted = _STL10_DIR / "stl10_binary"
+    if not extracted.exists():
         logger.info("Downloading STL-10 (~2.5 GB) to %s ...", _STL10_DIR)
-        urllib.request.urlretrieve(_STL10_URL, dest)
-        with tarfile.open(dest) as f:
+        urllib.request.urlretrieve(_STL10_URL, archive)
+        with tarfile.open(archive) as f:
             f.extractall(_STL10_DIR)
-    return os.path.join(_STL10_DIR, "stl10_binary")
+    return extracted
 
 
-def _load_images(path: str) -> np.ndarray:
-    with open(path, "rb") as f:
-        data = np.fromfile(f, dtype=np.uint8)
-    # STL-10 stores images column-major: reshape as (N, 3, 96, 96) then
-    # transpose (0, 3, 2, 1) to get (N, 96, 96, 3) in row-major RGB.
-    return data.reshape(-1, 3, 96, 96).transpose(0, 3, 2, 1).astype(np.float32) / 255.0
+def _load_images(path: Path) -> np.ndarray:
+    # STL-10 stores images column-major as raw uint8. We keep storage as uint8
+    # (~4x memory savings over float32) and cast to float32 per-sample in the
+    # data source's __getitem__.
+    data = np.fromfile(path, dtype=np.uint8)
+    return data.reshape(-1, 3, 96, 96).transpose(0, 3, 2, 1).copy()
 
 
-def _load_labels(path: str) -> np.ndarray:
-    with open(path, "rb") as f:
-        # STL-10 labels are 1-indexed (1..10); shift to 0..9.
-        return np.fromfile(f, dtype=np.uint8).astype(np.int32) - 1
+def _load_labels(path: Path) -> np.ndarray:
+    # STL-10 labels are 1-indexed (1..10); shift to 0..9.
+    return np.fromfile(path, dtype=np.uint8).astype(np.int32) - 1
 
 
-def _load_stl10_split(split: str) -> tuple[np.ndarray, np.ndarray]:
-    if split in _cache:
-        return _cache[split]
+class STL10Source:
+    """Grain RandomAccessDataSource for an STL-10 split.
 
-    data_dir = _download_stl10()
-    if split == "train":
-        X = _load_images(os.path.join(data_dir, "train_X.bin"))
-        y = _load_labels(os.path.join(data_dir, "train_y.bin"))
-    elif split == "test":
-        X = _load_images(os.path.join(data_dir, "test_X.bin"))
-        y = _load_labels(os.path.join(data_dir, "test_y.bin"))
-    elif split == "unlabeled":
-        X = _load_images(os.path.join(data_dir, "unlabeled_X.bin"))
-        y = np.full(len(X), -1, dtype=np.int32)
-    else:
-        raise ValueError(
-            f"Unknown split {split!r}. Expected 'train', 'test', or 'unlabeled'."
-        )
+    Images are held in memory as uint8; labels as int32. Float32 conversion
+    happens per-sample in __getitem__.
+    """
 
-    _cache[split] = (X, y)
-    return _cache[split]
+    def __init__(self, split: str) -> None:
+        _validate_split(split)
+        self._split = split
+        data_dir = _download_stl10()
+        if split == "unlabeled":
+            self._images = _load_images(data_dir / "unlabeled_X.bin")
+            self._labels = np.full(len(self._images), -1, dtype=np.int32)
+        else:
+            self._images = _load_images(data_dir / f"{split}_X.bin")
+            self._labels = _load_labels(data_dir / f"{split}_y.bin")
+
+    def __len__(self) -> int:
+        return len(self._images)
+
+    def __getitem__(self, index: int) -> dict[str, np.ndarray]:
+        return {
+            "image": self._images[index].astype(np.float32) / 255.0,
+            "label": self._labels[index],
+        }
+
+    def __repr__(self) -> str:
+        # Required by grain for checkpointing support.
+        return f"STL10Source(split={self._split!r})"
+
+
+@lru_cache(maxsize=3)
+def _get_source(split: str) -> STL10Source:
+    return STL10Source(split)
 
 
 def create_dataset(
     split: str,
     batch_size: int,
+    *,
     seed: int = 0,
-) -> Iterator[dict[str, np.ndarray]]:
-    if split not in ("train", "test", "unlabeled"):
-        raise ValueError(
-            f"Unknown split {split!r}. Expected 'train', 'test', or 'unlabeled'."
-        )
-
-    X, y = _load_stl10_split(split)
-
-    indices = np.random.default_rng(seed).permutation(len(X))
-    X, y = X[indices], y[indices]
-
-    for start in range(0, len(X), batch_size):
-        yield {
-            "image": X[start : start + batch_size],
-            "label": y[start : start + batch_size],
-        }
+    shuffle: bool = True,
+    drop_remainder: bool = False,
+) -> grain.DataLoader:
+    _validate_split(split)
+    source = _get_source(split)
+    sampler = grain.IndexSampler(
+        num_records=len(source),
+        shuffle=shuffle,
+        seed=seed,
+        shard_options=grain.NoSharding(),
+        num_epochs=1,
+    )
+    return grain.DataLoader(
+        data_source=source,
+        sampler=sampler,
+        operations=[
+            grain.Batch(batch_size=batch_size, drop_remainder=drop_remainder),
+        ],
+        worker_count=0,
+    )
 
 
 def get_split_size(split: str) -> int:
-    if split == "train":
-        return _STL10_TRAIN_SIZE
-    if split == "test":
-        return _STL10_TEST_SIZE
-    if split == "unlabeled":
-        return _STL10_UNLABELED_SIZE
-    raise ValueError(
-        f"Unknown split {split!r}. Expected 'train', 'test', or 'unlabeled'."
-    )
+    _validate_split(split)
+    return _SPLIT_SIZES[split]
+
+
+def compute_num_steps(
+    split: str, batch_size: int, *, drop_remainder: bool = True
+) -> int:
+    """Exact number of batches ``create_dataset`` will yield for one epoch.
+
+    create_dataset does not drop the incomplete final batch by default, so
+    plain floor division (``size // batch_size``) understates the true step
+    count whenever the split size is not a multiple of batch_size.
+    """
+    size = get_split_size(split)
+    if drop_remainder:
+        return size // batch_size
+    return -(-size // batch_size)  # ceil division
